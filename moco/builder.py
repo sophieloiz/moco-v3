@@ -13,6 +13,7 @@ class MoCo(nn.Module):
     Build a MoCo model with a base encoder, a momentum encoder, and two MLPs
     https://arxiv.org/abs/1911.05722
     """
+
     def __init__(self, base_encoder, dim=256, mlp_dim=4096, T=1.0):
         """
         dim: feature dimension (default: 256)
@@ -29,7 +30,9 @@ class MoCo(nn.Module):
 
         self._build_projector_and_predictor_mlps(dim, mlp_dim)
 
-        for param_b, param_m in zip(self.base_encoder.parameters(), self.momentum_encoder.parameters()):
+        for param_b, param_m in zip(
+            self.base_encoder.parameters(), self.momentum_encoder.parameters()
+        ):
             param_m.data.copy_(param_b.data)  # initialize
             param_m.requires_grad = False  # not update by gradient
 
@@ -42,12 +45,12 @@ class MoCo(nn.Module):
             mlp.append(nn.Linear(dim1, dim2, bias=False))
 
             if l < num_layers - 1:
-                mlp.append(nn.BatchNorm1d(dim2))
+                mlp.append(nn.InstanceNorm1d(dim2))
                 mlp.append(nn.ReLU(inplace=True))
             elif last_bn:
                 # follow SimCLR's design: https://github.com/google-research/simclr/blob/master/model_util.py#L157
                 # for simplicity, we further removed gamma in BN
-                mlp.append(nn.BatchNorm1d(dim2, affine=False))
+                mlp.append(nn.InstanceNorm1d(dim2, affine=False))
 
         return nn.Sequential(*mlp)
 
@@ -57,8 +60,10 @@ class MoCo(nn.Module):
     @torch.no_grad()
     def _update_momentum_encoder(self, m):
         """Momentum update of the momentum encoder"""
-        for param_b, param_m in zip(self.base_encoder.parameters(), self.momentum_encoder.parameters()):
-            param_m.data = param_m.data * m + param_b.data * (1. - m)
+        for param_b, param_m in zip(
+            self.base_encoder.parameters(), self.momentum_encoder.parameters()
+        ):
+            param_m.data = param_m.data * m + param_b.data * (1.0 - m)
 
     def contrastive_loss(self, q, k):
         # normalize
@@ -67,9 +72,11 @@ class MoCo(nn.Module):
         # gather all targets
         k = concat_all_gather(k)
         # Einstein sum is more intuitive
-        logits = torch.einsum('nc,mc->nm', [q, k]) / self.T
+        logits = torch.einsum("nc,mc->nm", [q, k]) / self.T
         N = logits.shape[0]  # batch size per GPU
-        labels = (torch.arange(N, dtype=torch.long) + N * torch.distributed.get_rank()).cuda()
+        labels = (
+            torch.arange(N, dtype=torch.long) + N * torch.distributed.get_rank()
+        ).cuda()
         return nn.CrossEntropyLoss()(logits, labels) * (2 * self.T)
 
     def forward(self, x1, x2, m):
@@ -99,7 +106,7 @@ class MoCo(nn.Module):
 class MoCo_ResNet(MoCo):
     def _build_projector_and_predictor_mlps(self, dim, mlp_dim):
         hidden_dim = self.base_encoder.fc.weight.shape[1]
-        del self.base_encoder.fc, self.momentum_encoder.fc # remove original fc layer
+        del self.base_encoder.fc, self.momentum_encoder.fc  # remove original fc layer
 
         # projectors
         self.base_encoder.fc = self._build_mlp(2, hidden_dim, mlp_dim, dim)
@@ -112,11 +119,14 @@ class MoCo_ResNet(MoCo):
 class MoCo_ViT(MoCo):
     def _build_projector_and_predictor_mlps(self, dim, mlp_dim):
         hidden_dim = self.base_encoder.head.weight.shape[1]
-        del self.base_encoder.head, self.momentum_encoder.head # remove original fc layer
+        del (
+            self.base_encoder.head,
+            self.momentum_encoder.head,
+        )  # remove original fc layer
 
         # projectors
-        self.base_encoder.head = self._build_mlp(3, hidden_dim, mlp_dim, dim)
-        self.momentum_encoder.head = self._build_mlp(3, hidden_dim, mlp_dim, dim)
+        self.base_encoder.head = self._build_mlp(1, hidden_dim, mlp_dim, dim)
+        self.momentum_encoder.head = self._build_mlp(1, hidden_dim, mlp_dim, dim)
 
         # predictor
         self.predictor = self._build_mlp(2, dim, mlp_dim, dim)
@@ -129,8 +139,9 @@ def concat_all_gather(tensor):
     Performs all_gather operation on the provided tensors.
     *** Warning ***: torch.distributed.all_gather has no gradient.
     """
-    tensors_gather = [torch.ones_like(tensor)
-        for _ in range(torch.distributed.get_world_size())]
+    tensors_gather = [
+        torch.ones_like(tensor) for _ in range(torch.distributed.get_world_size())
+    ]
     torch.distributed.all_gather(tensors_gather, tensor, async_op=False)
 
     output = torch.cat(tensors_gather, dim=0)
